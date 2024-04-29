@@ -17,13 +17,18 @@ class PPO:
         
         self._init_hyperparameters()
 
+        # Check for GPU availability and set device
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using {'GPU: ' + torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+
+
         # Algorithm step 1
         # initialise actor and critic networks
-        self.actor = FeedForwardNN(self.obs_dim, self.act_dim)
-        self.critic = FeedForwardNN(self.obs_dim, 1)
+        self.actor = FeedForwardNN(self.obs_dim, self.act_dim).to(self.device)
+        self.critic = FeedForwardNN(self.obs_dim, 1).to(self.device)
 
         # Create variable for matrix. 0.5 is chosen of stdev arbitrarily
-        self.cov_var = torch.full(size=(self.act_dim,), fill_value=0.5)
+        self.cov_var = torch.full(size=(self.act_dim,), fill_value=0.5, device=self.device)
         # Create the covariance matrix
         self.cov_mat = torch.diag(self.cov_var) 
 
@@ -63,6 +68,8 @@ class PPO:
             ep_rews = []
 
             obs, _ = self.env.reset()
+            obs = torch.tensor(obs, dtype=torch.float).to(self.device)
+            
             done = False
 
             for ep_t in range(self.max_timesteps_per_episode):   # initiate the rollout for an episode
@@ -76,6 +83,7 @@ class PPO:
 
 
                 obs, rew, done, _, _ = self.env.step(action)
+                obs = torch.tensor(obs, dtype=torch.float).to(self.device)
 
                 # collect reward, action, and log prob
                 ep_rews.append(rew)
@@ -89,10 +97,17 @@ class PPO:
             batch_lens.append(ep_t + 1)  # plus 1 because timestep starts at 0
             batch_rews.append(ep_rews)
         
+
+        batch_obs = torch.stack(batch_obs).to(self.device)
+        # batch_acts = torch.stack(batch_obs).to(self.device)
+        # batch_log_probs = torch.stack(batch_obs).to(self.device)
+        
+
         # reshape the data as tensors before returning
-        batch_obs = torch.tensor(batch_obs, dtype=torch.float)
-        batch_acts = torch.tensor(batch_acts, dtype=torch.float)
-        batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
+        # batch_obs = torch.tensor(batch_obs, dtype=torch.float).to(self.device)
+        batch_acts = torch.tensor(batch_acts, dtype=torch.float).to(self.device)
+        batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float).to(self.device)
+        
         # Algorithm step 4
         batch_rtgs = self.compute_rtgs(batch_rews)
         
@@ -139,7 +154,7 @@ class PPO:
                 batch_rtgs.insert(0, discounted_reward)
             
         # convert the rtgs into a tensor
-        batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
+        batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float).to(self.device)
         return batch_rtgs
     
 
@@ -222,9 +237,8 @@ class PPO:
      
 import gym
 env = gym.make("CartPole-v1")
-
-
 model = PPO(env)
+
 summed_rewards_list = model.learn(100000)
 # print(f"summed rewards list {summed_rewards_list}")
 print(f"summed rewards list length - > {len(summed_rewards_list)}")
