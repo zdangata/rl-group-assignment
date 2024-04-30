@@ -13,8 +13,8 @@ class FeedForwardNN(nn.Module):
 
     def forward(self, obs):
         # observations need to be a tensor, hence change it if it is a numpy array 
-        if isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float)
+        # if isinstance(obs, np.ndarray):
+        #     obs = torch.tensor(obs, dtype=torch.float)
 
         activation1 = F.relu(self.layer1(obs))
         activation2 = F.relu(self.layer2(activation1))
