@@ -7,6 +7,8 @@ from network import FeedForwardNN
 from torch.optim import Adam
 from matplotlib import pyplot as plt
 from gym.wrappers.record_video import RecordVideo
+from torch.optim.lr_scheduler import ExponentialLR
+
 
 
 class PPO:
@@ -39,18 +41,18 @@ class PPO:
             
     def _init_hyperparameters(self):
         # Default values for hyperparameters, will need to change later
-        self.timesteps_per_batch = 11200                 # timesteps per batch
-        self.max_timesteps_per_episode = 1600           # timesteps per episode
-        self.gamma = 0.999                               # discount factor
+        self.timesteps_per_batch = 5000                 # timesteps per batch
+        self.max_timesteps_per_episode = 1000           # timesteps per episode
+        self.gamma = 0.99                               # discount factor
         self.n_updates_per_iteration = 6                # number of epochs per iteration
         self.clip = 0.2                                 # as recommended by the paper
-        self.lr = 0.05                                 # learning rate of optimiser
+        self.lr = 0.003                                 # learning rate of optimiser
         
-        self.num_minibatches = 100                       # number of minibatch updates
-        self.ent_coef = 0.1                               # Entropy coefficient for entropy regularisation
+        self.num_minibatches = 16                       # number of minibatch updates; smaller minibatches mean higher num of updates
+        self.ent_coef = 0.008                               # Entropy coefficient for entropy regularisation
         self.max_grad_norm = 0.5                        # Gradient clipping threshold typically 0.5
-        self.target_kl = 0.01                           # KL Divergence threshold
-        self.lam = 0.98                                 # Lambda Parameter for GAE 
+        self.target_kl = 0.02                           # KL Divergence threshold
+        self.lam = 0.99                                 # Lambda Parameter for GAE 
 
     
     def rollout(self, t_so_far): 
@@ -78,6 +80,8 @@ class PPO:
         avg_rew_per_ep = []
         cumulative_timesteps = []
 
+        return_logger = 0
+
         while t < self.timesteps_per_batch:
             ep_rews = []  # rewards collected per episode
             ep_vals = []  # state values collected per episode
@@ -93,13 +97,13 @@ class PPO:
 
             video_start = (self.timesteps_per_batch - t) <= 50
 
-            if video_start:
-                # Start the recorder
-                self.env.start_video_recorder()
+            # if video_count == 10:
+            #     # Start the recorder
+            #     self.env.start_video_recorder()
 
             for ep_t in range(self.max_timesteps_per_episode):   # initiate the rollout for an episode
                 ep_dones.append(done)
-
+                
                 t += 1  # increment timesteps ran this batch so far
                 t_so_far += 1
 
@@ -114,8 +118,7 @@ class PPO:
 
 
                 total_episodic_return += rew
-                # episodic_return.append(rew)
-
+                return_logger += rew
 
                 # collect reward, action, and log prob
                 ep_rews.append(rew)
@@ -125,15 +128,16 @@ class PPO:
 
                 if done or truncated:
                     break
-            
+            video_count += 1
+
             avg_rew_per_ep.append(np.mean(episodic_return))
             total_rew_per_ep.append(total_episodic_return)
             cumulative_timesteps.append(t_so_far)
             
-            if video_start:
-                # Don't forget to close the video recorder before the env!
-                print("hihihihihihihi")
-                self.env.close_video_recorder()
+            # if video_count == 10:
+            #     # Don't forget to close the video recorder before the env!
+            #     print("hihihihihihihi")
+            #     self.env.close_video_recorder()
             
             # collect episodic length and rewards
             batch_lens.append(ep_t + 1)  # plus 1 because timestep starts at 0
@@ -141,7 +145,15 @@ class PPO:
             batch_vals.append(ep_vals)
             batch_dones.append(ep_dones)
         
+        # if video_count % 5 == 0:
+        #         avg_episode_return = int((return_logger/5))
+        #         print("average reward: ", avg_episode_return)
 
+        # log average rewards per batch
+        avg_episode_return = int((return_logger/video_count))
+        print("Average rewards this batch: ", avg_episode_return)
+
+        print("amount of episodes this batch =", video_count)
         batch_obs = torch.stack(batch_obs).to(self.device)      
 
         # reshape the data as tensors before returning
@@ -187,13 +199,15 @@ class PPO:
         
         summed_rewards_list = []
         timestep_counter = []
-
+        batch_no = 0
         while t_so_far < total_timesteps:           # Algorithm step 2 
             # Algorithm step 3
             # batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
             batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones, avg_rew_per_ep, cumulative_timesteps = self.rollout(t_so_far)
             
-            print(t_so_far)
+            batch_no += 1
+
+            print("timesteps so far: ", t_so_far)
             summed_rewards_list.extend(avg_rew_per_ep)
             timestep_counter.extend(cumulative_timesteps)
             
@@ -221,8 +235,10 @@ class PPO:
             inds = np.arange(step)
             minibatch_size = step // self.num_minibatches
 
-            for _ in range(self.n_updates_per_iteration):
-                # linear rate annealing
+            actor_scheduler = ExponentialLR(self.actor_optim, gamma=0.995)
+            critic_scheduler = ExponentialLR(self.critic_optim, gamma=0.995)
+            for epoch in range(self.n_updates_per_iteration):
+                # learning rate annealing
                 frac = (t_so_far - 1.0) / total_timesteps
                 new_lr = self.lr * (1.0 - frac)
                 new_lr = max(new_lr, 0.0)
@@ -267,7 +283,8 @@ class PPO:
                     entropy_loss = entropy.mean()
                     # Discount entropy loss by given coefficient
                     actor_loss = actor_loss - self.ent_coef * entropy_loss
-
+                    
+                    
                     # calculate gradients and perform backpropagation for actor network
                     self.actor_optim.zero_grad()
                     actor_loss.backward(retain_graph=True)  # we need to add retain_graph=True for the first network we backpropagate on or we'll get an error
@@ -279,10 +296,22 @@ class PPO:
                     critic_loss.backward()
                     nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)  # Gradient clipping
                     self.critic_optim.step()
-                
+
+
+                    # actor_scheduler.step()
+                    # critic_scheduler.step()
+
                 # If kl above threshold 
                 if approx_kl > self.target_kl:
                     break
+                
+                self.ent_coef *= 0.999  # entropy coefficient decay
+                self.ent_coef = max(self.ent_coef, 0.001)
+            # if batch_no == 4:
+            #     actor_scheduler.step()
+            #     critic_scheduler.step()
+            #     print(f"Learning Rate: {actor_scheduler.get_last_lr()[0]}")
+            #     batch_no = 0
 
         return summed_rewards_list, timestep_counter
     
@@ -315,39 +344,87 @@ class PPO:
         log_probs = dist.log_prob(batch_acts)
         return V, log_probs, dist.entropy()
     
-     
+
+def save_network(model):
+    torch.save(model.actor.state_dict(), "./saved_network/saved_model.pt")
+
+
+def load_model(env):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = FeedForwardNN(env.observation_space.shape[0], env.action_space.n).to(device)
+    model.load_state_dict(torch.load("./saved_network/saved_model.pt"))
+    model.eval()
+    return model
+
+
+def choose_action(model, obs):
+    obs = torch.tensor(obs, dtype=torch.float).to("cuda")
+    probabilities = model(obs)
+    dist = torch.distributions.Categorical(probabilities)
+    action = dist.sample()
+    log_prob = dist.log_prob(action)
+    return action.detach().item(), log_prob.detach()
+
+
+def record_final_vid(env, new_model):
+    obs, _ = env.reset()
+    env = RecordVideo(env=env, video_folder="./videos", name_prefix="final-video")
+    obs, _ = env.reset()
+    done = False
+    env.start_video_recorder()
+    while not done:
+        action = choose_action(new_model, obs)
+        action = action[0]
+        obs, rew, done, truncation, _ = env.step(action)
+        done = done or truncation
+    env.close_video_recorder()
+    
+
+def running_mean(x):
+    N = 50
+    kernel = np.ones(N)
+    conv_len = x.shape[0]-N
+    y = np.zeros(conv_len)
+    for i in range(conv_len):
+        y[i] = kernel @ x[i:i+N]
+        y[i] /= N
+    return y
+
+
 import gym
 env = gym.make("LunarLander-v2", render_mode="rgb_array")
 env = RecordVideo(env=env, video_folder="./videos", name_prefix="test-video")
 model = PPO(env)
 
-summed_rewards_list, timestep_counter = model.learn(200000)
-# print(f"summed rewards list {summed_rewards_list}")
+summed_rewards_list, timestep_counter = model.learn(500000)
+
+# to take a video with the learned model 
+save_network(model)
+new_model = load_model(env)
+record_final_vid(env, new_model)
+
+
 print(f"summed rewards list length - > {len(summed_rewards_list)}")
 
-# total_ep_rews = []
+avg_returns = [np.mean(summed_rewards_list[i]) for i in range(len(summed_rewards_list))]
+avg_returns = np.array(avg_returns)
+avg_score = running_mean(avg_returns)
 
-# for batch in summed_rewards_list:
-#     for ep_rew in batch:
-#         total_ep_rews.append(ep_rew)
+# # plt.plot(timestep_counter, avg_returns)
 
-# plt.plot(total_ep_rews)
-# plt.xlabel("Number of episodes")
-# plt.ylabel("Total rewards per episode")
+# plt.plot(avg_returns)
+# plt.title('Average Episodic Return vs. Cumulative Timesteps')
+# plt.xlabel('Cumulative Timesteps')
+# plt.ylabel('Average Episodic Return')
+# plt.grid(True)
 # plt.show()
 
 
-avg_returns = [np.mean(summed_rewards_list[i]) for i in range(len(summed_rewards_list))]
-print("summed rewards list ->", summed_rewards_list)
-print("avg returns -> ", avg_returns)
-
-print(len(avg_returns))
-print("boogeagoaoga ->>>>",timestep_counter)
-print(len(timestep_counter))
-
-plt.plot(timestep_counter, avg_returns)
-plt.title('Average Episodic Return vs. Cumulative Timesteps')
-plt.xlabel('Cumulative Timesteps')
-plt.ylabel('Average Episodic Return')
-plt.grid(True)
+plt.figure(figsize=(15,7))
+plt.ylabel("Rewards", fontsize=12)
+plt.xlabel("Episodes", fontsize=12)
+plt.plot(avg_returns, color='gray', linewidth=1)
+plt.plot(avg_score, color='blue', linewidth=3)
+plt.scatter(np.arange(avg_returns.shape[0]), avg_returns, color='green', linewidth=0.3)
+plt.title("Total rewards per episode")
 plt.show()
