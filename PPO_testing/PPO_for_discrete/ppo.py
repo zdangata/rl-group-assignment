@@ -211,7 +211,7 @@ class PPO:
             summed_rewards_list.extend(avg_rew_per_ep)
             timestep_counter.extend(cumulative_timesteps)
             
-
+            
             A_k = self.calculate_gae(batch_rews, batch_vals, batch_dones)
             V = self.critic(batch_obs).squeeze()
             batch_rtgs = A_k + V.detach()
@@ -321,7 +321,6 @@ class PPO:
         for ep_rews, ep_vals, ep_dones in zip(rewards, values, dones):
             advantages = []
             last_advantage = 0
-
             for t in reversed(range(len(ep_rews))):
                 if t + 1 < len(ep_rews):
                     delta = ep_rews[t] + self.gamma * ep_vals[t+1] * (1 - ep_dones[t+1]) - ep_vals[t]
@@ -383,7 +382,9 @@ def record_final_vid(env, new_model):
 def running_mean(x):
     N = 50
     kernel = np.ones(N)
+    print(x)
     conv_len = x.shape[0]-N
+    print(conv_len)
     y = np.zeros(conv_len)
     for i in range(conv_len):
         y[i] = kernel @ x[i:i+N]
@@ -393,10 +394,10 @@ def running_mean(x):
 
 import gym
 env = gym.make("LunarLander-v2", render_mode="rgb_array")
-env = RecordVideo(env=env, video_folder="./videos", name_prefix="test-video")
+# env = RecordVideo(env=env, video_folder="./videos", name_prefix="test-video")
 model = PPO(env)
 
-summed_rewards_list, timestep_counter = model.learn(500000)
+summed_rewards_list, timestep_counter = model.learn(10)
 
 # to take a video with the learned model 
 save_network(model)
